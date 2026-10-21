@@ -43,9 +43,7 @@ button{border:0;border-radius:10px;padding:10px 14px;cursor:pointer;font-weight:
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <script>
 const ADMIN_ID="48806236";
-/* Selepas Apps Script siap, tampal URL web app di bawah. */
 const API_URL="https://script.google.com/macros/s/AKfycbyrRxp4zbfa12kyS98RhYFZXCz0WtzKzqxs3NVJHER8cSo-dIVAWfAi31r7Rkuo-aapOQ/exec";
-
 const months=["Januari","Februari","Mac","April","Mei","Jun","Julai","Ogos","September","Oktober","November","Disember"];
 let data={year:2026,days:[14,14,13,22,15,19,23,18,0,0,0,0]};
 let editing=false, admin=false;
@@ -56,19 +54,19 @@ function render(){
   const table=document.getElementById("table");
   table.innerHTML='<div class="row head"><div>Bulan</div><div style="text-align:right">Hari Belajar</div></div>';
   months.forEach((m,i)=>{
-    table.insertAdjacentHTML("beforeend",
-      `<div class="row"><div>${m}</div><input class="days monthInput" type="number" min="0" max="366" value="${data.days[i]}" ${editing?"":"disabled"}></div>`);
+    table.insertAdjacentHTML("beforeend",`<div class="row"><div>${m}</div><input class="days monthInput" type="number" min="0" max="366" value="${data.days[i]}" ${editing?"":"disabled"}></div>`);
   });
   const total=data.days.reduce((a,b)=>a+(Number(b)||0),0);
-  table.insertAdjacentHTML("beforeend",
-    `<div class="row total"><div>JUMLAH TERKUMPUL</div><input class="days" id="total" type="number" value="${total}" disabled></div>`);
+  table.insertAdjacentHTML("beforeend",`<div class="row total"><div>JUMLAH TERKUMPUL</div><input class="days" id="total" type="number" value="${total}" disabled></div>`);
   if(editing){
     document.querySelectorAll(".monthInput").forEach(x=>x.addEventListener("input",updateTotal));
     document.getElementById("year").disabled=false;
-    document.getElementById("year").addEventListener("input",()=> {
+    document.getElementById("year").addEventListener("input",()=>{
       data.year=Math.max(1900,Math.min(9999,Number(document.getElementById("year").value)||2026));
       document.getElementById("titleYear").textContent=data.year;
     });
+  } else {
+    document.getElementById("year").disabled=true;
   }
 }
 function updateTotal(){
@@ -79,30 +77,53 @@ function updateTotal(){
 function setStatus(t){document.getElementById("status").textContent=t}
 function enterEdit(){
   if(!admin){setStatus("Mod edit hanya untuk admin.");return}
-  editing=true; render();
-  document.getElementById("editBtn").style.display="none";
-  document.getElementById("cancelBtn").style.display="inline-block";
-  document.getElementById("saveBtn").style.display="inline-block";
-  setStatus("Mod edit aktif.");
+  editing=true;render();setButtons();setStatus("Mod edit aktif.");
 }
 function cancelEdit(){editing=false;load()}
+function sameValues(a,b){
+  return !!a && !!b && Number(a.year)===Number(b.year) && Array.isArray(a.days) && Array.isArray(b.days) && a.days.length===12 && b.days.length===12 && a.days.every((v,i)=>Number(v)===Number(b.days[i]));
+}
+function wait(ms){return new Promise(resolve=>setTimeout(resolve,ms))}
 async function save(){
   updateTotal();
-  if(API_URL.includes("PASTE_")){setStatus("URL Apps Script belum dipasang.");return}
-  setStatus("Menyimpan...");
+  const expected={year:Number(data.year),days:data.days.map(Number)};
+  if(!Number.isInteger(expected.year)||expected.year<1900||expected.year>9999){setStatus("Tahun tidak sah.");return}
+  setStatus("Menyimpan dan mengesahkan data...");
   try{
-    const res=await fetch(API_URL,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify({action:"save",adminId:ADMIN_ID,year:data.year,days:data.days})});
-    const out=await res.json();
-    if(!out.ok) throw new Error(out.error||"Gagal simpan");
-    editing=false;render();setButtons();setStatus("✓ Berjaya disimpan.");
-  }catch(e){setStatus("Gagal simpan. Semak URL Apps Script.");}
+    // Apps Script kadangkala menolak bacaan respons cross-origin. no-cors membolehkan
+    // permintaan POST dihantar; kejayaan sebenar disahkan melalui bacaan GET selepas itu.
+    await fetch(API_URL,{
+      method:"POST",
+      mode:"no-cors",
+      headers:{"Content-Type":"text/plain;charset=utf-8"},
+      body:JSON.stringify({action:"save",adminId:ADMIN_ID,year:expected.year,days:expected.days})
+    });
+    let saved=null;
+    for(let attempt=0;attempt<4;attempt++){
+      await wait(700);
+      const verifyUrl=API_URL+(API_URL.includes("?")?"&":"?")+"verify="+Date.now();
+      const res=await fetch(verifyUrl,{cache:"no-store"});
+      const out=await res.json();
+      if(out && out.ok && out.data){
+        saved=out.data;
+        if(sameValues(expected,saved)) break;
+      }
+    }
+    if(!sameValues(expected,saved)){
+      setStatus("SIMPAN BELUM DISAHKAN. Data di Apps Script tidak berubah; semak fungsi doPost.");
+      return;
+    }
+    data={year:Number(saved.year),days:saved.days.map(Number)};
+    editing=false;render();setButtons();setStatus("✓ Berjaya disimpan dan disahkan.");
+  }catch(e){
+    setStatus("Gagal mengesahkan simpanan. Ralat: "+(e&&e.message?e.message:"sambungan Apps Script"));
+  }
 }
 async function load(){
-  if(API_URL.includes("PASTE_")){render();setButtons();return}
   try{
-    const res=await fetch(API_URL);
+    const res=await fetch(API_URL+(API_URL.includes("?")?"&":"?")+"load="+Date.now(),{cache:"no-store"});
     const out=await res.json();
-    if(out.ok&&out.data)data=out.data;
+    if(out.ok&&out.data&&Array.isArray(out.data.days)&&out.data.days.length===12){data={year:Number(out.data.year)||2026,days:out.data.days.map(Number)}}
   }catch(e){}
   render();setButtons();
 }
@@ -114,15 +135,9 @@ function setButtons(){
 document.getElementById("editBtn").addEventListener("click",enterEdit);
 document.getElementById("cancelBtn").addEventListener("click",cancelEdit);
 document.getElementById("saveBtn").addEventListener("click",save);
-
-/* Untuk keselamatan, akses edit ditentukan oleh ID Telegram.
-   Jika dibuka di Telegram Mini App, Telegram.WebApp.initDataUnsafe.user.id digunakan.
-   Untuk ujian luar Telegram, admin kekal berdasarkan ID yang ditetapkan. */
 (function(){
-  try{
-    const id=window.Telegram?.WebApp?.initDataUnsafe?.user?.id;
-    admin=String(id||"")===ADMIN_ID;
-  }catch(e){admin=false}
+  try{const id=window.Telegram?.WebApp?.initDataUnsafe?.user?.id;admin=String(id||"")===ADMIN_ID}
+  catch(e){admin=false}
   load();
 })();
 </script>
